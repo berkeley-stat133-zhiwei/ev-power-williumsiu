@@ -8,27 +8,161 @@ format: typst
 ## **Part 0: libraries**
 
 ```{r}
-
+#| echo: false
+#| output: false
+library(tidyverse)
+library(sf)
+library(rnaturalearth)
+library(maps)
 ```
 
 ## **Part 1:** **Defining Research Question**
 
-Chosen Question:
+Chosen Question: How do average energy prices change across states between 2021 and 2023? Considering the rise of electric vehicle (EV) usage, as well as increasing cost-of-living across the country amidst the continual supply-chain recovery from the COVID-19 pandemic, can we expect energy prices to increase nation-wide? 
 
 ## **Part 2: Data Preparation and Cleaning**
 
 ```{r}
+#| echo: false
+#| output: false
+avprices <- read_csv("data/av-energy-price-2021-2023.csv")
+evregstates <- read_csv("data/ev-registrations-by-state-2023.csv")
+renew2021 <- read_csv("data/renew-use-2021.csv")
+renew2022 <- read_csv("data/renew-use-2022.csv")
+renew2023 <- read_csv("data/renew-use-2023.csv")
+totuse2021 <- read_csv("data/total-use-2021.csv")
+totuse2022 <- read_csv("data/total-use-2022.csv")
+totuse2023 <- read_csv("data/total-use-2023.csv")
+
+```
+
+```{r}
+#| echo: false
+#| output: false
+# Total electricity use (cleaning)
+totuse2021 <- totuse2021 |>
+    pivot_longer(cols = 2:53, names_to = "State", values_to = "Use_2021") |>
+    filter(State != 'US') |>
+    mutate(Energy_Source = str_extract(Energy_Source, pattern = "\\w+"),
+            Use_2021 = as.integer(Use_2021)) |>
+    arrange(State)
+
+totuse2022 <- totuse2022 |>
+    pivot_longer(cols = 2:53, names_to = "State", values_to = "Use_2022") |>
+    filter(State != 'US') |>
+    mutate(Energy_Source = str_extract(Energy_Source, pattern = "\\w+"),
+            Use_2022 = as.integer(Use_2022)) |>
+    arrange(State)
+
+totuse2023 <- totuse2023 |>
+    pivot_longer(cols = 2:53, names_to = "State", values_to = "Use_2023") |>
+    filter(State != 'US') |>
+    mutate(Energy_Source = str_extract(Energy_Source, pattern = "\\w+"),
+            Use_2023 = as.integer(Use_2023)) |>
+    arrange(State)
+
+# Renewable energy use breakdown (cleaning)
+renew2021 <- renew2021 |>
+    mutate(State = str_to_upper(State), 
+            Renewable_Use_2021 = as.integer(
+                str_extract(Renewable_Use_2021, pattern = "\\d+"))) |>
+    filter(State != 'US')
+
+renew2022 <- renew2022 |>
+    mutate(State = str_to_upper(State), 
+            Renewable_Use_2022 = as.integer(
+                str_extract(Renewable_Use_2022, pattern = "\\d+"))) |>
+    filter(State != 'US')
+
+renew2023 <- renew2023 |>
+    mutate(State = str_to_upper(State), Renewable_Use_2023 = as.integer(str_extract(Renewable_Use_2023, pattern = "\\d+")))|>
+    filter(State != 'US')
+
+# Average prices (cleaning)
+avprices <-  str_match(avprices$`Total energy average price, dollars per million Btu,,,`, "([A-Z]{2}).+([\\d\\.]{5}).+([\\d\\.]{5}).+([\\d\\.]{5})") |> 
+  as_tibble(.name_repair = "minimal") |> 
+  set_names("match", "State", "Price2021", "Price2022", "Price2023")
+
+avprices <- avprices[,-1] |>
+    mutate(
+        Price2021 = as.double(Price2021),
+        Price2022 = as.double(Price2022),
+        Price2023 = as.double(Price2023)
+    ) |>
+    slice(-c(1,2,54))
+
+# EVs per state (cleaning)
+colnames(evregstates) <- slice(evregstates, 2)
+evregstates <- slice(evregstates, -c(1,2,54))
+
+evregstates <- evregstates |>
+    mutate(`Count-EVs` = str_extract(`Count-EVs`, pattern = "\\d+"))
 
 ```
 
 ## **Part 3: Joining / Pivoting Datasets for Analysis**
 
 ```{r}
+#| echo: false
+#| output: false
+renew2021 <- renew2021 |> 
+    pivot_wider(names_from = Energy_Source, values_from = Renewable_Use_2021)
+renew2022 <- renew2022 |> 
+    pivot_wider(names_from = Energy_Source, values_from = Renewable_Use_2022)
+renew2023 <- renew2023 |> 
+    pivot_wider(names_from = Energy_Source, values_from = Renewable_Use_2023)
+
+state_lookup <- data.frame(State = c(state.abb, "DC"), STATE = c(state.name, "District of Columbia"))
+
+renew_ev_av <- state_lookup |>
+left_join(renew2021) |>
+left_join(renew2022) |>
+left_join(renew2023) |>
+left_join(avprices) |>
+left_join(evregstates) |>
+mutate(perc_change21_23 = (Price2023 - Price2021)/Price2021 * 100)
+
+us_states <- ne_states(country = "united states of america", returnclass = "sf")
+
+joined <- left_join(us_states, renew_ev_av, join_by(name_en == STATE))
+
+```
+
+```{r}
+#| echo: false
+renew_ev_av |>
+    select(STATE, perc_change21_23) |>
+    arrange(perc_change21_23) |>
+    slice(1,2,3,49,50,51)
+
+renew_ev_av |>
+    select(perc_change21_23) |>
+    summarize(average = mean(perc_change21_23), std_dev = sd(perc_change21_23))
 
 ```
 
 ## **Part 4: Mapping Visualization**
 
 ```{r}
+#| echo: false
+
+joined |>
+    ggplot(aes(x = `Count-EVs`, y = perc_change21_23))+
+    geom_point()+
+    labs(title = "Increase in EV counts and energy price increases",
+    y = "Percentage Change in Price",
+    x = "Number of EVs (increasing)")+
+    theme_bw()+
+    theme(axis.text.x = element_blank())
+
+
+ggplot(joined) +
+  geom_sf(aes(fill = perc_change21_23), color = "white") +
+  scale_fill_continuous(name = "Price Change (in %)", na.value = "grey90") +
+  labs(title = "Average Energy Price changes between 2021-2023") +
+  coord_sf(xlim = c(-125, -66), ylim = c(24, 50), expand = FALSE) +
+  theme_minimal()
 
 ```
+
+Prices seem to rise across the country, with rates highest in Maine (34%) and Nevada (35%), and the lowest rates in Texas (6%) and Iowa (10%). The only state that experienced falling energy prices was Louisiana, which experienced a negligible 0.4% decrease across two years. The highest increases in prices appear clustered along the coasts, with the majority of the inner states experiencing lower rates between 10-20%. The average price increase across all states is relatively high, sitting at 19.1%, ableit with a relatively high standard deviation. Increases in prices, however, do not seem to correlate with the number of EVs in a state. That is, it seems like the rise in prices of energy is caused by some other factor. 
